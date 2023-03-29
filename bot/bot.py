@@ -15,13 +15,16 @@ from telegram import (
     User, 
     InlineKeyboardButton, 
     InlineKeyboardMarkup, 
-    BotCommand
+    BotCommand,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove
 )
 from telegram.ext import (
     Application,
     ApplicationBuilder,
     CallbackContext,
     CommandHandler,
+    ConversationHandler,
     MessageHandler,
     CallbackQueryHandler,
     AIORateLimiter,
@@ -46,7 +49,12 @@ HELP_MESSAGE = """Commands:
 ⚪ /settings – Show settings
 ⚪ /balance – Show balance
 ⚪ /help – Show help
+⚪ /var – Select prompt variable
 """
+
+#conversation handler status
+CHOOSING, TYPING_CHOICE, TYPING_REPLY = range(3)
+
 
 
 def split_text_into_chunks(text, chunk_size):
@@ -141,7 +149,6 @@ async def message_handle(update: Update, context: CallbackContext, message=None,
 
     user_id = update.message.from_user.id
     chat_mode = db.get_user_attribute(user_id, "current_chat_mode")
-    
     async with user_semaphores[user_id]:
         # new dialog timeout
         if use_new_dialog_timeout:
@@ -155,7 +162,11 @@ async def message_handle(update: Update, context: CallbackContext, message=None,
 
         try:
             message = message or update.message.text
-
+            dict_prompt_variable = db.get_user_attribute(user_id, "prompt_variable")
+            if dict_prompt_variable:
+                var = "回答須滿足以下設定\n" 
+                var += "\n".join([f"{key}：{value}" for key, value in dict_prompt_variable.items()]) +"\n" 
+                message = var + message
             current_model = db.get_user_attribute(user_id, "current_model")
             dialog_messages = db.get_dialog_messages(user_id, dialog_id=None)
             parse_mode = {
@@ -299,6 +310,11 @@ async def new_dialog_handle(update: Update, context: CallbackContext):
     await update.message.reply_text("Starting new dialog ✅")
 
     chat_mode = db.get_user_attribute(user_id, "current_chat_mode")
+    #重新設定 prompt_variable
+    prompt_variable = openai_utils.CHAT_MODES[chat_mode]["prompt_variable"]
+    if prompt_variable:
+        db.set_user_attribute(user_id, "prompt_variable", prompt_variable)
+
     await update.message.reply_text(f"{openai_utils.CHAT_MODES[chat_mode]['welcome_message']}", parse_mode=ParseMode.HTML)
 
 
@@ -326,7 +342,12 @@ async def set_chat_mode_handle(update: Update, context: CallbackContext):
 
     chat_mode = query.data.split("|")[1]
 
+    prompt_variable = openai_utils.CHAT_MODES[chat_mode]["prompt_variable"]
+    if prompt_variable:
+        db.set_user_attribute(user_id, "prompt_variable", prompt_variable)
+
     db.set_user_attribute(user_id, "current_chat_mode", chat_mode)
+    db.set_user_attribute(user_id, "prompt_variable", {})
     db.start_new_dialog(user_id)
 
     await query.edit_message_text(f"{openai_utils.CHAT_MODES[chat_mode]['welcome_message']}", parse_mode=ParseMode.HTML)
@@ -424,6 +445,108 @@ async def show_balance_handle(update: Update, context: CallbackContext):
 
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
+"""promt variable conversation"""
+def show_prompt_variable(user_id):
+    """傳回目前 pormpt variable 的設定字串"""
+    dict_variables = db.get_user_attribute(user_id, 'prompt_variable')
+    text = ""
+    if dict_variables:
+        text = "\n".join([f"{key}：{value}" for key, value in dict_variables.items()])    
+    return "您目前的 prompt variable 如下：\n" + text
+
+async def set_prompt_variable(update: Update, context: CallbackContext) -> int:
+    """start a conversation to set prompt_variable"""
+    await register_user_if_not_exists(update, context, update.message.from_user)
+    
+    user_id = update.message.from_user.id
+    db.set_user_attribute(user_id, "last_interaction", datetime.now())
+
+    chat_mode = db.get_user_attribute(user_id, "current_chat_mode")
+
+    prompt_variable = openai_utils.CHAT_MODES[chat_mode]["prompt_variable"]
+    dict_prompt_variable = db.get_user_attribute(user_id, "prompt_variable")
+    if prompt_variable:
+        for key in prompt_variable:
+            dict_prompt_variable.setdefault(key, prompt_variable[key])        
+        db.set_user_attribute(user_id, "prompt_variable", dict_prompt_variable)
+        reply_keyboard=[[var] for var in prompt_variable] + [["結束"]]
+        reply_markup = ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+        current_variable = show_prompt_variable(user_id)
+        await update.message.reply_text(
+            f"{current_variable}\n請選擇您想設定的變數，設定完成請輸入「結束」.",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML
+        )
+        return CHOOSING
+    else:
+        await update.message.reply_text(f"'{chat_mode}'沒有 prompt variable 相關設定")
+        return ConversationHandler.END
+
+async def choose_variable(update:Update, context: CallbackContext):
+    """Store info provided by user."""    
+    
+    user_id = update.message.from_user.id
+    db.set_user_attribute(user_id, "last_interaction", datetime.now())
+
+    dict_variables = db.get_user_attribute(user_id, "prompt_variable")
+
+    text = update.message.text
+    if text not in dict_variables:
+        await update.message.reply_text(f"你輸入的變數不在預設值中，請參考按鈕，或者輸入「結束」結束設定變數")
+        return CHOOSING
+    else:
+        context.user_data["choice"] = text
+        await update.message.reply_text(f"請輸入您想要的{text}：")
+
+        return TYPING_REPLY    
+
+async def received_information(update: Update, context: CallbackContext) -> int:
+    """Store prompt variable provided by user."""
+    user_id = update.message.from_user.id
+
+    chat_mode = db.get_user_attribute(user_id, "current_chat_mode")
+    dict_variables = db.get_user_attribute(user_id, 'prompt_variable')
+
+    if dict_variables:
+
+        user_data = context.user_data
+        text = update.message.text
+        variable = user_data["choice"]
+        dict_variables[variable] = text
+        db.set_user_attribute(user_id, "prompt_variable", dict_variables)
+        del user_data["choice"]
+
+        await update.message.reply_text(
+            f"您的「{variable}」設定為：{text}。(若設定完成請輸入「結束」)",
+        )
+        return CHOOSING
+    else:
+        await update.message.reply_text(f"'{chat_mode}' has no prompt variable.")
+        return ConversationHandler.END
+
+async def done(update: Update, context: CallbackContext) -> int:
+    """Display the gathered info and end the conversation."""
+    user_id = update.message.from_user.id
+
+    text = show_prompt_variable(user_id)
+    #清除user_data
+    user_data = context.user_data
+    if "choice" in user_data:
+        del user_data["choice"]
+    user_data.clear()
+
+    if update.message.text == "結束":
+        await update.message.reply_text(
+            f"設定完成！\n{text}",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+    else:        
+        await update.message.reply_text(
+            "設定中的命令無效，將結束設定。請重新下命令",
+            reply_markup=ReplyKeyboardRemove()
+        )
+    return ConversationHandler.END
+"""promt variable conversation"""
 
 async def edited_message_handle(update: Update, context: CallbackContext):
     text = "🥲 Unfortunately, message <b>editing</b> is not supported"
@@ -463,6 +586,7 @@ async def post_init(application: Application):
         BotCommand("/balance", "Show balance"),
         BotCommand("/settings", "Show settings"),
         BotCommand("/help", "Show help message"),
+        BotCommand("/var", "Select prompt Variable"),
     ])
 
 def run_bot() -> None:
@@ -484,7 +608,22 @@ def run_bot() -> None:
 
     application.add_handler(CommandHandler("start", start_handle, filters=user_filter))
     application.add_handler(CommandHandler("help", help_handle, filters=user_filter))
-
+    conversation_handler = ConversationHandler(
+        entry_points=[CommandHandler("var", set_prompt_variable)],
+        states={
+            CHOOSING:[
+                MessageHandler(filters.TEXT  & ~(filters.COMMAND | filters.Regex("^結束$")) & user_filter, choose_variable)                
+            ],
+            TYPING_REPLY:[
+                MessageHandler( 
+                    filters.TEXT & ~(filters.COMMAND | filters.Regex("^結束$")) & user_filter,
+                    received_information
+                )
+            ]
+        },
+        fallbacks=[MessageHandler(filters.Regex("^結束$") | filters.COMMAND, done)]
+    )
+    application.add_handler(conversation_handler)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & user_filter, message_handle))
     application.add_handler(CommandHandler("retry", retry_handle, filters=user_filter))
     application.add_handler(CommandHandler("new", new_dialog_handle, filters=user_filter))
@@ -499,6 +638,9 @@ def run_bot() -> None:
 
     application.add_handler(CommandHandler("balance", show_balance_handle, filters=user_filter))
     
+
+
+
     application.add_error_handler(error_handle)
     
     # start the bot

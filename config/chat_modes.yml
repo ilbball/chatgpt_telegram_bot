@@ -10,7 +10,8 @@ assistant:
     top_p: 1
     frequency_penalty: 0
     presence_penalty: 0
-
+  prompt_variable:
+    
 code_assistant:
   name: 👩🏼‍💻 程式碼助手
   welcome_message: 👩🏼‍💻 嗨，我是<b>ChatGPT代碼助手</b>。有什麼我可以幫你的嗎？
@@ -24,6 +25,7 @@ code_assistant:
     top_p: 1
     frequency_penalty: 0
     presence_penalty: 0
+  prompt_variable:
 
 translator_zh_tw:
   name: 🇹🇼 繁體中文翻譯器
@@ -39,6 +41,7 @@ translator_zh_tw:
     top_p: 1
     frequency_penalty: 0
     presence_penalty: 0
+  prompt_variable:
 
 socrates:
   name: 🧙‍♂️ 蘇格拉底
@@ -55,6 +58,7 @@ socrates:
     top_p: 1
     frequency_penalty: 0.5
     presence_penalty: 0.5
+  prompt_variable:
 
 game_assistent:
   name: 🎲 遊戲助手
@@ -69,6 +73,10 @@ game_assistent:
     top_p: 1
     frequency_penalty: 1.0
     presence_penalty: 0.5
+  prompt_variable:
+    主題: 不限制
+    風格: 不限制
+
 
 security_analyst:
   name: 📈 證券分析師
@@ -82,3 +90,4 @@ security_analyst:
     top_p: 1
     frequency_penalty: 0
     presence_penalty: 0
+  prompt_variable:
