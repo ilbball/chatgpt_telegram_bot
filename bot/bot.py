@@ -1,15 +1,15 @@
-import os
+import io
 import logging
 import asyncio
 import traceback
 import html
 import json
-import tempfile
-import pydub
-from pathlib import Path
 from datetime import datetime
 import openai
 
+from io import BytesIO
+import PyPDF2
+from docx import Document
 import telegram
 from telegram import (
     Update,
@@ -33,7 +33,7 @@ from telegram.constants import ParseMode, ChatAction
 import config
 import database
 import openai_utils
-
+import anthropic_utils
 
 # setup
 db = database.Database()
@@ -73,6 +73,7 @@ def split_text_into_chunks(text, chunk_size):
 
 
 async def register_user_if_not_exists(update: Update, context: CallbackContext, user: User):
+    default_model =config.models["available_text_models"][0]
     if not db.check_if_user_exists(user.id):
         db.add_new_user(
             user.id,
@@ -90,13 +91,13 @@ async def register_user_if_not_exists(update: Update, context: CallbackContext, 
         user_semaphores[user.id] = asyncio.Semaphore(1)
 
     if db.get_user_attribute(user.id, "current_model") is None:
-        db.set_user_attribute(user.id, "current_model", config.models["available_text_models"][0])
+        db.set_user_attribute(user.id, "current_model", default_model)
 
     # back compatibility for n_used_tokens field
     n_used_tokens = db.get_user_attribute(user.id, "n_used_tokens")
-    if isinstance(n_used_tokens, int):  # old format
+    if isinstance(n_used_tokens, int) or isinstance(n_used_tokens, float):  # old format
         new_n_used_tokens = {
-            "gpt-3.5-turbo": {
+            default_model: {
                 "n_input_tokens": 0,
                 "n_output_tokens": n_used_tokens
             }
@@ -180,6 +181,61 @@ async def retry_handle(update: Update, context: CallbackContext):
 
     await message_handle(update, context, message=last_dialog_message["user"], use_new_dialog_timeout=False)
 
+def file_to_text(file:BytesIO, file_name:str):
+    assert file_name.split(".")[-1] in ("doc","docx",'pdf'), "只支援 doc、docx、pdf 檔案"
+    text = ""
+    # 處理 pdf 檔案
+    if file_name.split(".")[-1] == "pdf":
+        try:
+
+            pdf = PyPDF2.PdfReader(file)
+            text = ""
+            for page in pdf.pages:
+                text += "\n" + page.extract_text()
+        
+        except Exception as e:
+            raise Exception(f"處理 pdf 檔案時發生錯誤: {e}")
+    # 處理 doc 檔案
+    elif file_name.split(".")[-1] == "doc" or file_name.split(".")[1] == "docx":
+        try:
+            text = ""
+            doc = Document(file)
+            for paragraph in doc.paragraphs:
+                text += "\n" + paragraph.text
+        except Exception as e:
+            raise Exception(f"處理 doc 檔案時發生錯誤: {e}")
+    res = f"以下是檔案名稱與內容，接下來的回答請參考這些內容，當參考這些內容時要貼近原文。\n<檔案>：「{file_name}」\n<內容>：/n'''/n{text}\n'''/n"
+    return res
+
+async def file_handle(update: Update, context: CallbackContext):
+    doc = update.message.document
+    if doc.file_name.split(".")[-1] in ("doc","docx",'pdf'):
+        file = await update.message.effective_attachment.get_file()
+        file_iobytes  = BytesIO()
+        await file.download_to_memory(file_iobytes)
+        file_iobytes.seek(0)
+        user_id = update.message.from_user.id
+        message = file_to_text(file_iobytes, doc.file_name)
+        answer = f"您的檔案\"{doc.file_name}\"我已參考，有什麼可以回答的呢?"
+        # update user data
+        new_dialog_message = {"user": message, "bot": answer, "date": datetime.now()}
+
+        db.set_dialog_messages(
+            user_id,
+            db.get_dialog_messages(user_id, dialog_id=None) + [new_dialog_message],
+            dialog_id=None
+        )
+
+        await update.message.reply_text(answer)
+    else:
+        await unsupport_message_handle(update, context)
+    return
+
+async def unsupport_message_handle(update: Update, context: CallbackContext, message=None):
+    error_text = f"{update.message.document.file_name}I don't know how to read files or videos. Send the picture in normal mode (Quick Mode)."
+    logger.error(error_text)
+    await update.message.reply_text(error_text)
+    return
 
 async def message_handle(update: Update, context: CallbackContext, message=None, use_new_dialog_timeout=True):
     # check if bot was mentioned (for group chats)
@@ -236,11 +292,15 @@ async def message_handle(update: Update, context: CallbackContext, message=None,
                 "markdown": ParseMode.MARKDOWN
             }[config.chat_modes[chat_mode]["parse_mode"]]
 
-            chatgpt_instance = openai_utils.ChatGPT(model=current_model)
-            if config.enable_message_streaming:
-                gen = chatgpt_instance.send_message_stream(_message, dialog_messages=dialog_messages, chat_mode=chat_mode)
+            if current_model in ("claude-3-opus-20240229","claude-3-sonnet-20240229"):
+                chat_instance = anthropic_utils.Claude(model=current_model)
             else:
-                answer, (n_input_tokens, n_output_tokens), n_first_dialog_messages_removed = await chatgpt_instance.send_message(
+                chat_instance = openai_utils.ChatGPT(model=current_model)
+
+            if config.enable_message_streaming:
+                gen = chat_instance.send_message_stream(_message, dialog_messages=dialog_messages, chat_mode=chat_mode)
+            else:
+                answer, (n_input_tokens, n_output_tokens), n_first_dialog_messages_removed = await chat_instance.send_message(
                     _message,
                     dialog_messages=dialog_messages,
                     chat_mode=chat_mode
@@ -342,25 +402,15 @@ async def voice_message_handle(update: Update, context: CallbackContext):
     db.set_user_attribute(user_id, "last_interaction", datetime.now())
 
     voice = update.message.voice
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp_dir = Path(tmp_dir)
-        voice_ogg_path = tmp_dir / "voice.ogg"
+    voice_file = await context.bot.get_file(voice.file_id)
+    
+    # store file in memory, not on disk
+    buf = io.BytesIO()
+    await voice_file.download_to_memory(buf)
+    buf.name = "voice.oga"  # file extension is required
+    buf.seek(0)  # move cursor to the beginning of the buffer
 
-        # download
-        voice_file = await context.bot.get_file(voice.file_id)
-        await voice_file.download_to_drive(voice_ogg_path)
-
-        # convert to mp3
-        voice_mp3_path = tmp_dir / "voice.mp3"
-        pydub.AudioSegment.from_file(voice_ogg_path).export(voice_mp3_path, format="mp3")
-
-        # transcribe
-        with open(voice_mp3_path, "rb") as f:
-            transcribed_text = await openai_utils.transcribe_audio(f)
-
-            if transcribed_text is None:
-                 transcribed_text = ""
-
+    transcribed_text = await openai_utils.transcribe_audio(buf)
     text = f"🎤: <i>{transcribed_text}</i>"
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
@@ -382,7 +432,7 @@ async def generate_image_handle(update: Update, context: CallbackContext, messag
     message = message or update.message.text
 
     try:
-        image_urls = await openai_utils.generate_images(message, n_images=config.return_n_generated_images)
+        image_urls = await openai_utils.generate_images(message, n_images=config.return_n_generated_images, size=config.image_size)
     except openai.error.InvalidRequestError as e:
         if str(e).startswith("Your request was rejected as a result of our safety system"):
             text = "🥲 Your request <b>doesn't comply</b> with OpenAI's usage policies.\nWhat did you write there, huh?"
@@ -665,6 +715,8 @@ def run_bot() -> None:
         .token(config.telegram_token)
         .concurrent_updates(True)
         .rate_limiter(AIORateLimiter(max_retries=5))
+        .http_version("1.1")
+        .get_updates_http_version("1.1")
         .post_init(post_init)
         .build()
     )
@@ -673,14 +725,19 @@ def run_bot() -> None:
     user_filter = filters.ALL
     if len(config.allowed_telegram_usernames) > 0:
         usernames = [x for x in config.allowed_telegram_usernames if isinstance(x, str)]
-        user_ids = [x for x in config.allowed_telegram_usernames if isinstance(x, int)]
-        user_filter = filters.User(username=usernames) | filters.User(user_id=user_ids)
+        any_ids = [x for x in config.allowed_telegram_usernames if isinstance(x, int)]
+        user_ids = [x for x in any_ids if x > 0]
+        group_ids = [x for x in any_ids if x < 0]
+        user_filter = filters.User(username=usernames) | filters.User(user_id=user_ids) | filters.Chat(chat_id=group_ids)
 
     application.add_handler(CommandHandler("start", start_handle, filters=user_filter))
     application.add_handler(CommandHandler("help", help_handle, filters=user_filter))
     application.add_handler(CommandHandler("help_group_chat", help_group_chat_handle, filters=user_filter))
 
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & user_filter, message_handle))
+    application.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND & user_filter, message_handle))
+    application.add_handler(MessageHandler(filters.VIDEO & ~filters.COMMAND & user_filter, unsupport_message_handle))
+    application.add_handler(MessageHandler(filters.Document.ALL & ~filters.COMMAND & user_filter, file_handle))
     application.add_handler(CommandHandler("retry", retry_handle, filters=user_filter))
     application.add_handler(CommandHandler("new", new_dialog_handle, filters=user_filter))
     application.add_handler(CommandHandler("cancel", cancel_handle, filters=user_filter))
