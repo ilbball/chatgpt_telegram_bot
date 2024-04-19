@@ -1,4 +1,4 @@
-available_text_models: ["gpt-4-1106-preview", "claude-3-opus-20240229","claude-3-sonnet-20240229", "gpt-3.5-turbo-16k", "text-davinci-003"]
+available_text_models: ["gpt-4-turbo", "claude-3-opus-20240229","claude-3-sonnet-20240229", "gpt-3.5-turbo-16k", "text-davinci-003"]
 
 info:
   gpt-3.5-turbo:
@@ -27,23 +27,23 @@ info:
       Fast: 5
       Cheap: 5
 
-  gpt-4:
+  gpt-4-turbo:
     type: chat_completion
-    name: GPT-4
-    description: GPT-4 is the <b>smartest</b> and most advanced model in the world. But it is slower and not as cost-efficient as ChatGPT. Best choice for <b>complex</b> intellectual tasks.
+    name: GPT-4 Turbo
+    description: GPT-4 Turbo is a <b>faster</b> and <b>cheaper</b> version of GPT-4.Currently points to gpt-4-trubo-2024-04-09
 
-    price_per_1000_input_tokens: 0.03
-    price_per_1000_output_tokens: 0.06
+    price_per_1000_input_tokens: 0.01
+    price_per_1000_output_tokens: 0.03
 
     scores:
-      Smart: 5
-      Fast: 2
-      Cheap: 2
+      smart: 5
+      fast: 4
+      cheap: 3
 
   gpt-4-1106-preview:
     type: chat_completion
-    name: GPT-4 Turbo
-    description: GPT-4 Turbo is a <b>faster</b> and <b>cheaper</b> version of GPT-4. It's as smart as GPT-4, so you should use it instead of GPT-4.
+    name: GPT-4 1106
+    description: GPT-4 1106 is a <b>faster</b> and <b>cheaper</b> version of GPT-4.Currently points to gpt-4-trubo-2024-04-09
 
     price_per_1000_input_tokens: 0.01
     price_per_1000_output_tokens: 0.03
