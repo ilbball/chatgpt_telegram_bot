@@ -164,6 +164,9 @@ class ChatGPT:
         elif model == "gpt-4-turbo":
             tokens_per_message = 3
             tokens_per_name = 1
+        elif model == "gpt-4o":
+            tokens_per_message = 3
+            tokens_per_name = 1
         else:
             raise ValueError(f"Unknown model: {model}")
 
