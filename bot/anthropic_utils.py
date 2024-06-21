@@ -13,8 +13,8 @@ ANTHROPIC_COMPLETION_OPTIONS = {
 
 
 class Claude:
-    def __init__(self, model="claude-3-opus-20240229"):
-        assert model in {"claude-3-opus-20240229","claude-3-sonnet-20240229"}, f"Unknown model: {model}"
+    def __init__(self, model="claude-3-5-sonnet-20240620"):
+        assert model in {"claude-3-opus-20240229","claude-3-sonnet-20240229","claude-3-5-sonnet-20240620"}, f"Unknown model: {model}"
         self.model = model
         self.client = anthropic.AsyncAnthropic(api_key=config.anthropic_api_key)
 
@@ -26,7 +26,7 @@ class Claude:
         answer = None
         while answer is None:
             try:
-                if self.model in {"claude-3-opus-20240229","claude-3-sonnet-20240229"}:
+                if self.model in {"claude-3-opus-20240229","claude-3-sonnet-20240229","claude-3-5-sonnet-20240620"}:
                     messages = self._generate_prompt_messages(message, dialog_messages, chat_mode)
                     r = await self.client.messages.create(
                         model=self.model,
@@ -62,7 +62,7 @@ class Claude:
         answer = None
         while answer is None:
             try:
-                if self.model in {"claude-3-opus-20240229","claude-3-sonnet-20240229"}:
+                if self.model in {"claude-3-opus-20240229","claude-3-sonnet-20240229","claude-3-5-sonnet-20240620"}:
                     messages = self._generate_prompt_messages(message, dialog_messages, chat_mode)
                     r_gen = await self.client.messages.create(
                         model=self.model,
@@ -129,7 +129,7 @@ class Claude:
         answer = answer.strip()
         return answer
 
-    def _count_tokens_from_messages(self, messages, answer, model="gpt-3.5-turbo"):
+    def _count_tokens_from_messages(self, messages, answer, model="claude-3-5-sonnet-20240620"):
         if 'claude' in  model:
             encoding = tiktoken.encoding_for_model('gpt-4')
         else:
@@ -150,6 +150,9 @@ class Claude:
             tokens_per_message = 3
             tokens_per_name = 1
         elif model == "claude-3-sonnet-20240229":
+            tokens_per_message = 3
+            tokens_per_name = 1
+        elif model == "claude-3-5-sonnet-20240620":
             tokens_per_message = 3
             tokens_per_name = 1
         else:

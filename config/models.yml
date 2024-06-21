@@ -1,4 +1,4 @@
-available_text_models: ["gpt-4o", "claude-3-opus-20240229","claude-3-sonnet-20240229", "text-davinci-003"]
+available_text_models: ["gpt-4o","claude-3-5-sonnet-20240620", "claude-3-opus-20240229","claude-3-sonnet-20240229", "text-davinci-003"]
 
 info:
   gpt-4o:
@@ -100,6 +100,18 @@ info:
     price_per_1000_output_tokens: 0.015
     scores:
       smart: 4
+      fast: 5
+      cheap: 4
+
+  claude-3-5-sonnet-20240620:
+    type: chat_completion
+    name: Claude3.5-sonnet
+    description: Claude3.5-sonnet is a <b>fast</b> and <b>cheap</b> model. It's smarter than Claude3-opus.
+
+    price_per_1000_input_tokens: 0.003
+    price_per_1000_output_tokens: 0.015
+    scores:
+      smart: 5
       fast: 5
       cheap: 4
 

@@ -292,7 +292,7 @@ async def message_handle(update: Update, context: CallbackContext, message=None,
                 "markdown": ParseMode.MARKDOWN
             }[config.chat_modes[chat_mode]["parse_mode"]]
 
-            if current_model in ("claude-3-opus-20240229","claude-3-sonnet-20240229"):
+            if current_model in ("claude-3-opus-20240229","claude-3-sonnet-20240229","claude-3-5-sonnet-20240620"):
                 chat_instance = anthropic_utils.Claude(model=current_model)
             else:
                 chat_instance = openai_utils.ChatGPT(model=current_model)
